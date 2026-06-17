@@ -1,0 +1,23 @@
+{
+  "_comment": "Copy this file to members.json and fill in your club's data. members.json is gitignored and never committed.",
+  "_template_vars": {
+    "display_name": "Member's display name (set in this file)",
+    "activity_name": "Strava activity title",
+    "distance": "Distance in miles (float)",
+    "time": "Moving time, e.g. '28m 15s' or '1h 4m'",
+    "pace": "Average pace per mile, e.g. '8:42'",
+    "strava_url": "Link to the Strava activity or athlete profile"
+  },
+  "members": [
+    {
+      "strava_athlete_id": 123456789,
+      "display_name": "Alice",
+      "message": "🏃 {display_name} just crushed it! *{activity_name}* — **{distance} mi** in **{time}** at {pace} /mi 🔥"
+    },
+    {
+      "strava_athlete_id": 987654321,
+      "display_name": "Bob",
+      "message": "💨 {display_name} is out here making it look easy! *{activity_name}* — {distance} mi in {time}"
+    }
+  ]
+}

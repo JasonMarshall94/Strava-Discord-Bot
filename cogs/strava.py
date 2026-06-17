@@ -1,131 +1,311 @@
+import time
 import logging
+import datetime
+
 import aiohttp
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
+
 import config
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_MESSAGE = (
+    "🏃 **{display_name}** just logged a run! *{activity_name}* — "
+    "**{distance} mi** in **{time}** ({pace} /mi)"
+)
+
+
+def _format_duration(seconds: int) -> str:
+    m, s = divmod(seconds, 60)
+    h, m = divmod(m, 60)
+    return f"{h}h {m}m" if h else f"{m}m {s}s"
+
+
+def _format_pace(distance_m: float, moving_time_s: int) -> str:
+    if distance_m <= 0:
+        return "—"
+    pace_s = moving_time_s / (distance_m / 1609.344)
+    m, s = divmod(int(pace_s), 60)
+    return f"{m}:{s:02d}"
+
+
+def _activity_key(activity: dict) -> tuple[str, str, int, int]:
+    """Returns (firstname, lastname, moving_time, distance_m) for deduplication."""
+    athlete = activity.get("athlete", {})
+    return (
+        athlete.get("firstname", ""),
+        athlete.get("lastname", ""),
+        int(activity.get("moving_time", 0)),
+        int(activity.get("distance", 0)),
+    )
+
 
 class Strava(commands.Cog):
-    """Strava integration commands."""
+    """Polls the Strava club activity feed and posts run notifications."""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self._silent_poll_needed = True  # first poll after startup/reset is always silent
+        self.poll_activities.start()
 
-    def _store(self):
-        return config.store
+    def cog_unload(self):
+        self.poll_activities.cancel()
 
-    strava_group = app_commands.Group(name="strava", description="Strava commands")
+    def request_silent_poll(self):
+        """Call this after wiping run_log so the next poll re-logs without notifying."""
+        self._silent_poll_needed = True
 
-    @strava_group.command(name="connect", description="Link your Strava account")
-    async def connect(self, interaction: discord.Interaction):
-        auth_url = (
-            f"{config.STRAVA_AUTH_URL}"
-            f"?client_id={config.STRAVA_CLIENT_ID}"
-            f"&redirect_uri={config.STRAVA_REDIRECT_URI}"
-            f"&response_type=code"
-            f"&scope=read,activity:read_all"
-            f"&state={interaction.user.id}"
-        )
-        embed = discord.Embed(
-            title="Connect Strava",
-            description="Click the link below to authorize CGRC Bot to access your Strava data.",
-            color=discord.Color.orange(),
-        )
-        embed.add_field(name="Authorization URL", value=f"[Click here to connect]({auth_url})", inline=False)
-        embed.set_footer(text="Your data is only used within this server.")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+    # ------------------------------------------------------------------
+    # Polling task
+    # ------------------------------------------------------------------
 
-    @strava_group.command(name="profile", description="View your Strava profile")
-    async def profile(self, interaction: discord.Interaction):
-        token = self._store().get_strava_token(interaction.user.id)
+    @tasks.loop(minutes=5)
+    async def poll_activities(self):
+        token = await self._get_valid_token()
         if not token:
-            await interaction.response.send_message(
-                "You haven't connected your Strava account yet. Use `/strava connect` first.",
-                ephemeral=True,
-            )
+            logger.warning("No valid Strava token — skipping poll. Run `python authenticate.py`.")
             return
 
-        await interaction.response.defer(ephemeral=True)
-        async with aiohttp.ClientSession() as session:
-            headers = {"Authorization": f"Bearer {token['access_token']}"}
-            async with session.get(f"{config.STRAVA_API_BASE}/athlete", headers=headers) as resp:
-                if resp.status != 200:
-                    await interaction.followup.send("Failed to fetch Strava profile.", ephemeral=True)
-                    return
-                athlete = await resp.json()
-
-        embed = discord.Embed(
-            title=f"{athlete.get('firstname', '')} {athlete.get('lastname', '')}",
-            url=f"https://www.strava.com/athletes/{athlete['id']}",
-            color=discord.Color.orange(),
-        )
-        if athlete.get("profile"):
-            embed.set_thumbnail(url=athlete["profile"])
-        embed.add_field(name="Location", value=athlete.get("city") or "N/A", inline=True)
-        embed.add_field(name="Followers", value=athlete.get("follower_count", 0), inline=True)
-        embed.add_field(name="Following", value=athlete.get("friend_count", 0), inline=True)
-        await interaction.followup.send(embed=embed, ephemeral=True)
-
-    @strava_group.command(name="activities", description="List your recent Strava activities")
-    @app_commands.describe(count="Number of activities to show (max 10)")
-    async def activities(self, interaction: discord.Interaction, count: int = 5):
-        token = self._store().get_strava_token(interaction.user.id)
-        if not token:
-            await interaction.response.send_message(
-                "You haven't connected your Strava account yet. Use `/strava connect` first.",
-                ephemeral=True,
-            )
+        if not config.STRAVA_CLUB_ID:
+            logger.warning("STRAVA_CLUB_ID not set — skipping poll.")
             return
-
-        count = max(1, min(count, 10))
-        await interaction.response.defer(ephemeral=True)
 
         async with aiohttp.ClientSession() as session:
             headers = {"Authorization": f"Bearer {token['access_token']}"}
-            params = {"per_page": count}
             async with session.get(
-                f"{config.STRAVA_API_BASE}/athlete/activities",
+                f"{config.STRAVA_API_BASE}/clubs/{config.STRAVA_CLUB_ID}/activities",
                 headers=headers,
-                params=params,
+                params={"per_page": 30},
             ) as resp:
                 if resp.status != 200:
-                    await interaction.followup.send("Failed to fetch activities.", ephemeral=True)
+                    logger.error(f"Club activities fetch failed: {resp.status}")
                     return
                 activities = await resp.json()
 
-        if not activities:
-            await interaction.followup.send("No recent activities found.", ephemeral=True)
-            return
+        silent = self._silent_poll_needed
+        self._silent_poll_needed = False
 
-        embed = discord.Embed(title="Recent Strava Activities", color=discord.Color.orange())
-        for act in activities:
-            distance_mi = round(act.get("distance", 0) / 1609.344, 2)
-            moving_time = act.get("moving_time", 0)
-            minutes, seconds = divmod(moving_time, 60)
-            hours, minutes = divmod(minutes, 60)
-            time_str = f"{hours}h {minutes}m" if hours else f"{minutes}m {seconds}s"
-            embed.add_field(
-                name=act.get("name", "Unnamed activity"),
-                value=f"{act.get('type', 'Activity')} · {distance_mi} mi · {time_str}",
-                inline=False,
-            )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        for activity in activities:
+            if activity.get("type") != "Run":
+                continue
 
-    def store_token(self, user_id: int, token_data: dict):
-        """Persist Strava OAuth token and athlete ID mapping."""
-        self._store().set_strava_token(
-            discord_user_id=user_id,
+            firstname, lastname, moving_time, distance_m = _activity_key(activity)
+            if not firstname:
+                continue
+
+            if config.store.has_activity(firstname, lastname, moving_time, distance_m):
+                continue
+
+            distance_miles = round(distance_m / 1609.344, 2)
+            config.store.log_activity(firstname, lastname, moving_time, distance_m, distance_miles)
+
+            if not silent:
+                await self._post_notification(activity, firstname, lastname, distance_m)
+
+    @poll_activities.before_loop
+    async def before_poll(self):
+        await self.bot.wait_until_ready()
+
+    # ------------------------------------------------------------------
+    # Token management
+    # ------------------------------------------------------------------
+
+    async def _get_valid_token(self) -> dict | None:
+        token = config.store.get_bot_token()
+        if not token:
+            return None
+        if token["expires_at"] < int(time.time()) + 60:
+            token = await self._refresh_token(token["refresh_token"])
+        return token
+
+    async def _refresh_token(self, refresh_token: str) -> dict | None:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                config.STRAVA_TOKEN_URL,
+                data={
+                    "client_id": config.STRAVA_CLIENT_ID,
+                    "client_secret": config.STRAVA_CLIENT_SECRET,
+                    "grant_type": "refresh_token",
+                    "refresh_token": refresh_token,
+                },
+            ) as resp:
+                if resp.status != 200:
+                    logger.error("Strava token refresh failed.")
+                    return None
+                token_data = await resp.json()
+
+        config.store.set_bot_token(
             access_token=token_data["access_token"],
             refresh_token=token_data["refresh_token"],
-            expires_at=token_data.get("expires_at", 0),
+            expires_at=token_data["expires_at"],
         )
-        athlete_id = token_data.get("athlete", {}).get("id")
-        if athlete_id:
-            self._store().set_athlete_map(athlete_id, user_id)
-        logger.info(f"Stored Strava token for user {user_id}")
+        logger.info("Strava token refreshed successfully.")
+        return token_data
+
+    # ------------------------------------------------------------------
+    # Notification posting
+    # ------------------------------------------------------------------
+
+    async def _post_notification(
+        self,
+        activity: dict,
+        firstname: str,
+        lastname: str,
+        distance_m: float,
+    ):
+        channel_id = config.store.get("NOTIFY_CHANNEL_ID")
+        if not channel_id:
+            logger.warning("NOTIFY_CHANNEL_ID not set — skipping notification.")
+            return
+
+        channel = self.bot.get_channel(int(channel_id))
+        if not channel:
+            logger.warning(f"Channel {channel_id} not found.")
+            return
+
+        member = config.store.get_member_by_strava_name(firstname, lastname)
+        custom_on = config.store.get("CUSTOM_MESSAGES_ENABLED", "0") == "1"
+
+        if member:
+            display_name = member["display_name"]
+            message_template = member["message"] if custom_on else DEFAULT_MESSAGE
+        else:
+            display_name = f"{firstname} {lastname}".strip()
+            message_template = DEFAULT_MESSAGE
+
+        moving_time = activity.get("moving_time", 0)
+        distance_miles = round(distance_m / 1609.344, 2)
+
+        template_vars = {
+            "display_name": display_name,
+            "activity_name": activity.get("name", "Unnamed activity"),
+            "distance": distance_miles,
+            "time": _format_duration(moving_time),
+            "pace": _format_pace(distance_m, moving_time),
+            "strava_url": f"https://www.strava.com/clubs/{config.STRAVA_CLUB_ID}",
+        }
+
+        try:
+            message_text = message_template.format_map(template_vars)
+        except (KeyError, ValueError):
+            message_text = DEFAULT_MESSAGE.format_map(template_vars)
+
+        elevation = activity.get("total_elevation_gain", 0)
+        stats = f"{distance_miles} mi · {template_vars['time']} · {template_vars['pace']} /mi"
+        if elevation:
+            stats += f" · ↑{int(elevation)} m"
+
+        embed = discord.Embed(
+            title=activity.get("name", "New Run"),
+            url=template_vars["strava_url"],
+            color=discord.Color.orange(),
+        )
+        embed.description = f"{message_text}\n\n{stats}"
+        embed.set_footer(text="via Strava")
+
+        await channel.send(embed=embed)
+        logger.info(f"Posted run notification for {firstname} {lastname}")
+
+    # ------------------------------------------------------------------
+    # Slash commands
+    # ------------------------------------------------------------------
+
+    strava_group = app_commands.Group(name="strava", description="Strava commands")
+
+    @strava_group.command(name="debug", description="Show recent club member names from Strava (admin only)")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def debug(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        token = await self._get_valid_token()
+        if not token or not config.STRAVA_CLUB_ID:
+            await interaction.followup.send("No token or club ID set.", ephemeral=True)
+            return
+
+        async with aiohttp.ClientSession() as session:
+            headers = {"Authorization": f"Bearer {token['access_token']}"}
+            async with session.get(
+                f"{config.STRAVA_API_BASE}/clubs/{config.STRAVA_CLUB_ID}/activities",
+                headers=headers,
+                params={"per_page": 30},
+            ) as resp:
+                activities = await resp.json()
+
+        if not activities:
+            await interaction.followup.send("No activities returned from Strava.", ephemeral=True)
+            return
+
+        seen = set()
+        lines = []
+        for a in activities:
+            athlete = a.get("athlete", {})
+            fn = athlete.get("firstname", "?")
+            ln = athlete.get("lastname", "?")
+            key = (fn, ln)
+            if key not in seen:
+                seen.add(key)
+                lines.append(f"`firstname: {fn}` `lastname: {ln}`")
+
+        await interaction.followup.send(
+            f"**Unique athletes in recent club feed ({len(lines)} found):**\n" + "\n".join(lines),
+            ephemeral=True,
+        )
+
+    @strava_group.command(name="test", description="Send a test run notification to the configured channel (admin only)")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def test(self, interaction: discord.Interaction):
+        channel_id = config.store.get("NOTIFY_CHANNEL_ID")
+        if not channel_id:
+            await interaction.response.send_message(
+                "No notification channel set. Use `/notify setchannel` first.",
+                ephemeral=True,
+            )
+            return
+
+        channel = self.bot.get_channel(int(channel_id))
+        if not channel:
+            await interaction.response.send_message(
+                "Notification channel not found.", ephemeral=True
+            )
+            return
+
+        fake_activity = {
+            "name": "Test Run",
+            "type": "Run",
+            "distance": 8046.72,   # 5 miles in meters
+            "moving_time": 2550,   # 42m 30s
+            "total_elevation_gain": 42,
+        }
+        fake_athlete = {"firstname": "Test", "lastname": "Runner"}
+
+        await self._post_notification(fake_activity, "Test", "Runner", fake_activity["distance"])
+        await interaction.response.send_message(
+            f"Test notification sent to {channel.mention}.", ephemeral=True
+        )
+
+    @strava_group.command(name="status", description="Check the bot's Strava connection status")
+    async def status(self, interaction: discord.Interaction):
+        token = config.store.get_bot_token()
+        if not token:
+            await interaction.response.send_message(
+                "❌ No Strava token found. Run `python authenticate.py` to connect.",
+                ephemeral=True,
+            )
+            return
+
+        expires_at = token["expires_at"]
+        if expires_at < int(time.time()):
+            status_text = "⚠️ Token expired — will refresh on next poll."
+        else:
+            status_text = "✅ Connected"
+
+        embed = discord.Embed(title="Strava Connection Status", color=discord.Color.orange())
+        embed.add_field(name="Status", value=status_text, inline=False)
+        embed.add_field(name="Club ID", value=config.STRAVA_CLUB_ID or "Not set", inline=True)
+        embed.add_field(name="Token expires", value=f"<t:{expires_at}:R>", inline=True)
+        embed.add_field(name="Poll interval", value="Every 5 minutes", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 async def setup(bot: commands.Bot):

@@ -3,37 +3,42 @@ Interactive setup script — run once to initialise the encrypted config databas
 
     python setup_db.py
 
-If a .env file is present its values are offered as defaults. Each key can be
-confirmed with Enter or overridden by typing a new value. Blank input on an
-optional key skips it.
+After setup, run `python authenticate.py` to connect the bot's Strava account.
 """
 
-import os
+import json
 import sys
 from pathlib import Path
+
 from dotenv import dotenv_values
+
 from db.store import ConfigStore
 
 ENV_PATH = Path(".env")
+MEMBERS_PATH = Path("members.json")
 
 REQUIRED_KEYS = [
-    ("DISCORD_TOKEN",        "Discord bot token"),
-    ("DISCORD_GUILD_ID",     "Discord guild/server ID (leave blank for global slash commands)"),
-    ("STRAVA_CLIENT_ID",     "Strava application Client ID"),
+    ("DISCORD_TOKEN", "Discord bot token"),
+    (
+        "DISCORD_GUILD_ID",
+        "Discord guild/server ID (leave blank for global slash commands)",
+    ),
+    ("STRAVA_CLIENT_ID", "Strava application Client ID"),
     ("STRAVA_CLIENT_SECRET", "Strava application Client Secret"),
+    ("STRAVA_CLUB_ID", "Strava Club ID"),
 ]
 
 OPTIONAL_KEYS = [
-    ("STRAVA_REDIRECT_URI",          "Strava OAuth redirect URI",                    "http://localhost:8080/callback"),
-    ("STRAVA_WEBHOOK_VERIFY_TOKEN",  "Strava webhook verify token (choose any secret string)", None),
-    ("WEBHOOK_HOST",                 "Webhook server host",                          "0.0.0.0"),
-    ("WEBHOOK_PORT",                 "Webhook server port",                          "8080"),
-    ("LOG_LEVEL",                    "Log level (DEBUG/INFO/WARNING/ERROR)",          "INFO"),
+    ("LOG_LEVEL", "Log level (DEBUG/INFO/WARNING/ERROR)", "INFO"),
 ]
 
 
 def prompt(label: str, default: str | None, required: bool) -> str | None:
-    suffix = f" [{default}]" if default else (" (required)" if required else " (optional, Enter to skip)")
+    suffix = (
+        f" [{default}]"
+        if default
+        else (" (required)" if required else " (optional, Enter to skip)")
+    )
     while True:
         value = input(f"{label}{suffix}: ").strip()
         if value:
@@ -43,6 +48,29 @@ def prompt(label: str, default: str | None, required: bool) -> str | None:
         if not required:
             return None
         print("  This field is required.")
+
+
+def seed_members(store: ConfigStore) -> None:
+    if not MEMBERS_PATH.exists():
+        print(f"\n  No {MEMBERS_PATH} found — skipping member seeding.")
+        print(f"  Copy members.example.json → members.json, fill in your club members,")
+        print(f"  then re-run this script to seed them.")
+        return
+
+    with open(MEMBERS_PATH) as f:
+        data = json.load(f)
+
+    members = data.get("members", [])
+    print(f"\n  Seeding {len(members)} member(s) from {MEMBERS_PATH}...")
+    for m in members:
+        store.set_member(
+            strava_athlete_id=m["strava_athlete_id"],
+            display_name=m["display_name"],
+            message=m["message"],
+            strava_firstname=m.get("strava_firstname", ""),
+            strava_lastname=m.get("strava_lastname", ""),
+        )
+        print(f"    ✓ {m['display_name']} (athlete ID: {m['strava_athlete_id']})")
 
 
 def main():
@@ -68,11 +96,18 @@ def main():
         else:
             print(f"  – {key} skipped\n")
 
-    print("Setup complete. Config stored in cgrc.db (encrypted).")
+    seed_members(store)
+
+    print("\nSetup complete. Config stored in cgrc.db (encrypted).")
     print("Keep secret.key safe — losing it means losing access to your config.")
+    print("\nNext step: run `python authenticate.py` to connect your Strava account.")
 
     if ENV_PATH.exists():
-        ans = input("\nDelete .env now that values are in the database? [y/N]: ").strip().lower()
+        ans = (
+            input("\nDelete .env now that values are in the database? [y/N]: ")
+            .strip()
+            .lower()
+        )
         if ans == "y":
             ENV_PATH.unlink()
             print(".env deleted.")

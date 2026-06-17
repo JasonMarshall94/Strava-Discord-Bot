@@ -7,6 +7,9 @@
 cgrc.db
 secret.key
 
+# Club member data — copy from members.example.json and fill in your own
+members.json
+
 # Python
 __pycache__/
 *.py[cod]

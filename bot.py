@@ -1,4 +1,3 @@
-import asyncio
 import logging
 
 import discord
@@ -12,6 +11,7 @@ INITIAL_COGS = [
     "cogs.general",
     "cogs.strava",
     "cogs.notifications",
+    "cogs.leaderboard",
 ]
 
 
@@ -26,7 +26,6 @@ class CGRCBot(commands.Bot):
             intents=intents,
             description="CGRC Strava Connection Bot",
         )
-        self._webhook_server = None
 
     async def setup_hook(self):
         for cog in INITIAL_COGS:
@@ -44,19 +43,6 @@ class CGRCBot(commands.Bot):
         else:
             await self.tree.sync()
             logger.info("Synced slash commands globally")
-
-        # Start the webhook/OAuth callback server
-        from webhook_server import WebhookServer
-
-        self._webhook_server = WebhookServer(self)
-        asyncio.create_task(
-            self._webhook_server.start(config.WEBHOOK_HOST, config.WEBHOOK_PORT)
-        )
-
-    async def close(self):
-        if self._webhook_server:
-            await self._webhook_server.stop()
-        await super().close()
 
     async def on_ready(self):
         logger.info(f"Logged in as {self.user} (ID: {self.user.id})")

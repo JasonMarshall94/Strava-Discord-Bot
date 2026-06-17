@@ -1,10 +1,11 @@
 """
 Encrypted SQLite config and token store.
 
-All values are encrypted with Fernet (AES-128-CBC + HMAC-SHA256) before being
-written to the database. The master key lives in `secret.key` (or the path set
-by the CGRC_KEY_FILE env var). If the key file does not exist on first run a
-new key is generated and saved there automatically.
+All sensitive values (tokens, secrets) are encrypted with Fernet
+(AES-128-CBC + HMAC-SHA256) before being written to the database.
+The master key lives in `secret.key` (or the path set by the CGRC_KEY_FILE
+env var). If the key file does not exist on first run a new key is generated
+and saved there automatically.
 """
 
 import os
@@ -57,23 +58,62 @@ class ConfigStore:
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
-            CREATE TABLE IF NOT EXISTS strava_tokens (
-                discord_user_id  INTEGER PRIMARY KEY,
-                access_token     TEXT NOT NULL,
-                refresh_token    TEXT NOT NULL,
-                expires_at       INTEGER NOT NULL,
-                updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
-            );
-
-            -- Maps a Strava athlete ID to a Discord user ID so incoming
-            -- webhook events can be routed to the right Discord member.
-            CREATE TABLE IF NOT EXISTS strava_athletes (
+            -- Club members. strava_firstname/lastname are matched against the
+            -- Strava API athlete object (e.g. firstname="Jason", lastname="M.").
+            CREATE TABLE IF NOT EXISTS members (
                 strava_athlete_id  INTEGER PRIMARY KEY,
-                discord_user_id    INTEGER NOT NULL UNIQUE
+                display_name       TEXT NOT NULL,
+                strava_firstname   TEXT NOT NULL DEFAULT '',
+                strava_lastname    TEXT NOT NULL DEFAULT '',
+                message            TEXT NOT NULL
             );
 
-
+            -- One row per processed run. Deduplication key is
+            -- (firstname, lastname, moving_time, distance_m) since the Strava
+            -- club activities endpoint returns no activity ID or start date.
+            -- logged_at is used for year scoping in leaderboard queries.
+            CREATE TABLE IF NOT EXISTS run_log (
+                strava_firstname  TEXT NOT NULL,
+                strava_lastname   TEXT NOT NULL,
+                moving_time       INTEGER NOT NULL,
+                distance_m        INTEGER NOT NULL,
+                distance_miles    REAL NOT NULL,
+                logged_at         TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (strava_firstname, strava_lastname, moving_time, distance_m)
+            );
         """)
+
+        # Add name columns if upgrading from old schema
+        for col, definition in [
+            ("strava_firstname", "TEXT NOT NULL DEFAULT ''"),
+            ("strava_lastname",  "TEXT NOT NULL DEFAULT ''"),
+        ]:
+            try:
+                self._conn.execute(f"ALTER TABLE members ADD COLUMN {col} {definition}")
+                self._conn.commit()
+            except sqlite3.OperationalError:
+                pass  # column already exists
+
+        # Replace old run_log schema (had strava_athlete_id + start_date PK)
+        cols = {
+            row[1]
+            for row in self._conn.execute("PRAGMA table_info(run_log)").fetchall()
+        }
+        if "strava_athlete_id" in cols:
+            self._conn.executescript("""
+                DROP TABLE run_log;
+                CREATE TABLE run_log (
+                    strava_firstname  TEXT NOT NULL,
+                    strava_lastname   TEXT NOT NULL,
+                    moving_time       INTEGER NOT NULL,
+                    distance_m        INTEGER NOT NULL,
+                    distance_miles    REAL NOT NULL,
+                    logged_at         TEXT NOT NULL DEFAULT (datetime('now')),
+                    PRIMARY KEY (strava_firstname, strava_lastname, moving_time, distance_m)
+                );
+            """)
+            self._conn.commit()
+
         self._conn.commit()
 
     # ------------------------------------------------------------------
@@ -121,84 +161,150 @@ class ConfigStore:
         return [r["key"] for r in rows]
 
     # ------------------------------------------------------------------
-    # Strava token API
+    # Strava bot token (single bot account, refreshed automatically)
     # ------------------------------------------------------------------
 
-    def get_strava_token(self, discord_user_id: int) -> dict | None:
-        row = self._conn.execute(
-            "SELECT * FROM strava_tokens WHERE discord_user_id = ?",
-            (discord_user_id,),
-        ).fetchone()
-        if row is None:
+    def get_bot_token(self) -> dict | None:
+        access = self.get("STRAVA_ACCESS_TOKEN")
+        refresh = self.get("STRAVA_REFRESH_TOKEN")
+        expires = self.get("STRAVA_TOKEN_EXPIRES_AT")
+        if not access or not refresh or not expires:
             return None
         return {
-            "access_token": self._decrypt(row["access_token"]),
-            "refresh_token": self._decrypt(row["refresh_token"]),
-            "expires_at": row["expires_at"],
+            "access_token": access,
+            "refresh_token": refresh,
+            "expires_at": int(expires),
         }
 
-    def set_strava_token(
+    def set_bot_token(self, access_token: str, refresh_token: str, expires_at: int) -> None:
+        self.set("STRAVA_ACCESS_TOKEN", access_token)
+        self.set("STRAVA_REFRESH_TOKEN", refresh_token)
+        self.set("STRAVA_TOKEN_EXPIRES_AT", str(expires_at))
+
+    # ------------------------------------------------------------------
+    # Members
+    # ------------------------------------------------------------------
+
+    def get_all_members(self) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT * FROM members ORDER BY display_name"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_member_by_strava_name(self, firstname: str, lastname: str) -> dict | None:
+        row = self._conn.execute(
+            "SELECT * FROM members WHERE strava_firstname = ? AND strava_lastname = ?",
+            (firstname, lastname),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_member(self, strava_athlete_id: int) -> dict | None:
+        row = self._conn.execute(
+            "SELECT * FROM members WHERE strava_athlete_id = ?",
+            (strava_athlete_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def set_member(
         self,
-        discord_user_id: int,
-        access_token: str,
-        refresh_token: str,
-        expires_at: int,
+        strava_athlete_id: int,
+        display_name: str,
+        message: str,
+        strava_firstname: str = "",
+        strava_lastname: str = "",
     ) -> None:
         self._conn.execute(
             """
-            INSERT INTO strava_tokens
-                (discord_user_id, access_token, refresh_token, expires_at, updated_at)
-            VALUES (?, ?, ?, ?, datetime('now'))
-            ON CONFLICT(discord_user_id) DO UPDATE SET
-                access_token  = excluded.access_token,
-                refresh_token = excluded.refresh_token,
-                expires_at    = excluded.expires_at,
-                updated_at    = excluded.updated_at
+            INSERT INTO members
+                (strava_athlete_id, display_name, strava_firstname, strava_lastname, message)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(strava_athlete_id) DO UPDATE SET
+                display_name     = excluded.display_name,
+                strava_firstname = excluded.strava_firstname,
+                strava_lastname  = excluded.strava_lastname,
+                message          = excluded.message
             """,
-            (
-                discord_user_id,
-                self._encrypt(access_token),
-                self._encrypt(refresh_token),
-                expires_at,
-            ),
+            (strava_athlete_id, display_name, strava_firstname, strava_lastname, message),
         )
         self._conn.commit()
 
-    def delete_strava_token(self, discord_user_id: int) -> None:
+    def delete_member(self, strava_athlete_id: int) -> None:
         self._conn.execute(
-            "DELETE FROM strava_tokens WHERE discord_user_id = ?", (discord_user_id,)
+            "DELETE FROM members WHERE strava_athlete_id = ?", (strava_athlete_id,)
         )
         self._conn.commit()
 
     # ------------------------------------------------------------------
-    # Strava athlete ↔ Discord user mapping
+    # Run log
     # ------------------------------------------------------------------
 
-    def set_athlete_map(self, strava_athlete_id: int, discord_user_id: int) -> None:
+    def has_activity(
+        self,
+        firstname: str,
+        lastname: str,
+        moving_time: int,
+        distance_m: int,
+    ) -> bool:
+        row = self._conn.execute(
+            """SELECT 1 FROM run_log
+               WHERE strava_firstname = ? AND strava_lastname = ?
+                 AND moving_time = ? AND distance_m = ?""",
+            (firstname, lastname, moving_time, distance_m),
+        ).fetchone()
+        return row is not None
+
+    def log_activity(
+        self,
+        firstname: str,
+        lastname: str,
+        moving_time: int,
+        distance_m: int,
+        distance_miles: float,
+    ) -> None:
         self._conn.execute(
             """
-            INSERT INTO strava_athletes (strava_athlete_id, discord_user_id)
-            VALUES (?, ?)
-            ON CONFLICT(strava_athlete_id) DO UPDATE SET
-                discord_user_id = excluded.discord_user_id
+            INSERT OR IGNORE INTO run_log
+                (strava_firstname, strava_lastname, moving_time, distance_m, distance_miles)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            (strava_athlete_id, discord_user_id),
+            (firstname, lastname, moving_time, distance_m, distance_miles),
         )
         self._conn.commit()
 
-    def get_discord_user_for_athlete(self, strava_athlete_id: int) -> int | None:
-        row = self._conn.execute(
-            "SELECT discord_user_id FROM strava_athletes WHERE strava_athlete_id = ?",
-            (strava_athlete_id,),
-        ).fetchone()
-        return row["discord_user_id"] if row else None
+    def set_manual_miles(self, strava_firstname: str, strava_lastname: str, miles: float) -> None:
+        """Wipe all existing run_log entries for this member and set a single
+        baseline entry. Real runs from polling will accumulate on top."""
+        self._conn.execute(
+            "DELETE FROM run_log WHERE strava_firstname=? AND strava_lastname=?",
+            (strava_firstname, strava_lastname),
+        )
+        self._conn.execute(
+            """INSERT INTO run_log
+                   (strava_firstname, strava_lastname, moving_time, distance_m, distance_miles)
+               VALUES (?, ?, 0, -1, ?)""",
+            (strava_firstname, strava_lastname, miles),
+        )
+        self._conn.commit()
 
-    def get_athlete_id_for_discord_user(self, discord_user_id: int) -> int | None:
-        row = self._conn.execute(
-            "SELECT strava_athlete_id FROM strava_athletes WHERE discord_user_id = ?",
-            (discord_user_id,),
-        ).fetchone()
-        return row["strava_athlete_id"] if row else None
+    def get_yearly_miles(self, year: int) -> list[dict]:
+        """Total miles per member for the given year, all members included (0 if none logged)."""
+        rows = self._conn.execute(
+            """
+            SELECT m.display_name,
+                   COALESCE(SUM(r.distance_miles), 0.0) AS total_miles
+            FROM members m
+            LEFT JOIN run_log r
+                ON m.strava_firstname = r.strava_firstname
+               AND m.strava_lastname  = r.strava_lastname
+               AND strftime('%Y', r.logged_at) = ?
+            GROUP BY m.strava_athlete_id, m.display_name
+            ORDER BY total_miles DESC
+            """,
+            (str(year),),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------------
 
     def close(self) -> None:
         self._conn.close()

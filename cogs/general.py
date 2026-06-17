@@ -28,12 +28,23 @@ class General(commands.Cog):
         )
         embed.add_field(
             name="Strava",
-            value="`/strava connect` — Link your Strava account\n`/strava profile` — View your Strava profile\n`/strava activities` — List recent activities",
+            value="`/strava status` — Check the bot's Strava connection status",
             inline=False,
         )
         embed.add_field(
-            name="Notifications (admin only)",
-            value="`/notify setchannel` — Set the channel for run notifications",
+            name="Miles Tracker",
+            value="`/leaders` — Show the annual miles leaderboard\n*(Auto-posts every Monday at 8:00 UTC)*",
+            inline=False,
+        )
+        embed.add_field(
+            name="Admin only",
+            value=(
+                "`/notify setchannel` — Set the channel for run notifications and weekly recaps\n"
+                "`/notify custommessages` — Toggle custom per-member messages on or off\n"
+                "`/setmiles [name] [miles]` — Set a member's total miles for the year\n"
+                "`/strava status` — Check the bot's Strava connection\n"
+                "`/strava test` — Send a test run notification"
+            ),
             inline=False,
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)

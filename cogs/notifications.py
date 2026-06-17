@@ -38,6 +38,31 @@ class Notifications(commands.Cog):
                 ephemeral=True,
             )
 
+    @notify_group.command(
+        name="custommessages",
+        description="Toggle custom per-member run messages on or off (admin only)",
+    )
+    @app_commands.describe(enabled="Turn custom messages on or off")
+    @app_commands.choices(enabled=[
+        app_commands.Choice(name="on", value="1"),
+        app_commands.Choice(name="off", value="0"),
+    ])
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def custommessages(self, interaction: discord.Interaction, enabled: str):
+        config.store.set("CUSTOM_MESSAGES_ENABLED", enabled)
+        state = "on" if enabled == "1" else "off"
+        await interaction.response.send_message(
+            f"Custom run messages turned **{state}**.", ephemeral=True
+        )
+
+    @custommessages.error
+    async def custommessages_error(self, interaction: discord.Interaction, error):
+        if isinstance(error, app_commands.MissingPermissions):
+            await interaction.response.send_message(
+                "You need the **Manage Server** permission to change this setting.",
+                ephemeral=True,
+            )
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Notifications(bot))
