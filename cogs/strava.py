@@ -63,6 +63,10 @@ class Strava(commands.Cog):
 
     @tasks.loop(minutes=5)
     async def poll_activities(self):
+        if config.store.get("SILENT_POLL_REQUESTED") == "1":
+            config.store.set("SILENT_POLL_REQUESTED", "0")
+            self._silent_poll_needed = True
+
         token = await self._get_valid_token()
         if not token:
             logger.warning("No valid Strava token — skipping poll. Run `python authenticate.py`.")

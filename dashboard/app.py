@@ -161,6 +161,7 @@ async def member_save(
                 member["strava_lastname"],
                 float(miles.strip()),
             )
+            store.set("SILENT_POLL_REQUESTED", "1")
         except ValueError:
             return RedirectResponse(
                 f"/members/{athlete_id}?error=Invalid+miles+value", status_code=302
