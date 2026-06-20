@@ -47,7 +47,7 @@ def _fmt_duration(seconds: int) -> str:
 async def login_page(request: Request):
     if _logged_in(request):
         return RedirectResponse("/", status_code=302)
-    return templates.TemplateResponse("login.html", {"request": request, "error": None})
+    return templates.TemplateResponse(request, "login.html", {"error": None})
 
 
 @app.post("/login")
@@ -64,9 +64,7 @@ async def login_submit(
         return RedirectResponse("/", status_code=302)
 
     return templates.TemplateResponse(
-        "login.html",
-        {"request": request, "error": "Invalid username or password"},
-        status_code=401,
+        request, "login.html", {"error": "Invalid username or password"}, status_code=401
     )
 
 
@@ -94,8 +92,7 @@ async def home(request: Request):
     for run in runs:
         run["duration"] = _fmt_duration(run["moving_time"])
 
-    return templates.TemplateResponse("index.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "index.html", {
         "leaderboard": leaderboard,
         "recent_runs": runs,
         "year": year,
@@ -117,10 +114,7 @@ async def members_list(request: Request):
     for m in members:
         m["total_miles"] = miles_by_name.get(m["display_name"], 0.0)
 
-    return templates.TemplateResponse("members.html", {
-        "request": request,
-        "members": members,
-    })
+    return templates.TemplateResponse(request, "members.html", {"members": members})
 
 
 @app.get("/members/{athlete_id}")
@@ -136,8 +130,7 @@ async def member_edit_page(request: Request, athlete_id: int):
     miles_by_name = {r["display_name"]: r["total_miles"] for r in store.get_yearly_miles(year)}
     member["total_miles"] = miles_by_name.get(member["display_name"], 0.0)
 
-    return templates.TemplateResponse("member_edit.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "member_edit.html", {
         "member": member,
         "saved": request.query_params.get("saved"),
         "error": request.query_params.get("error"),
@@ -185,8 +178,7 @@ async def settings_page(request: Request):
     if not _logged_in(request):
         return RedirectResponse("/login", status_code=302)
 
-    return templates.TemplateResponse("settings.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "settings.html", {
         "channel_id": store.get("NOTIFY_CHANNEL_ID", ""),
         "custom_messages": store.get("CUSTOM_MESSAGES_ENABLED", "0") == "1",
         "saved": request.query_params.get("saved"),

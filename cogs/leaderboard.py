@@ -31,16 +31,13 @@ def _build_embed() -> discord.Embed:
         embed.add_field(name="Leaderboard", value="No runs logged yet.", inline=False)
     else:
         # Fixed-width table in a code block
-        lines = ["#    Name            Miles    Left"]
-        lines.append("─" * 36)
+        lines = ["#  Name        Miles"]
+        lines.append("─" * 20)
         for i, row in enumerate(rows, 1):
             miles = row["total_miles"]
-            if miles >= GOAL_MILES:
-                left = "DONE 👑"
-            else:
-                left = f"{GOAL_MILES - miles:.1f}"
+            crown = " 👑" if miles >= GOAL_MILES else ""
             name = row["display_name"]
-            lines.append(f"{i:<4} {name:<15} {miles:>6.1f}   {left}")
+            lines.append(f"{i:<2} {name:<10} {miles:>5.1f}{crown}")
         embed.add_field(
             name="Leaderboard (most → least)",
             value="```\n" + "\n".join(lines) + "\n```",
