@@ -24,5 +24,6 @@ build/
 # Logs
 *.log
 
-# Local progress tracking
+# Local notes — not for public repo
 PROGRESS.md
+PI_GUIDE.md

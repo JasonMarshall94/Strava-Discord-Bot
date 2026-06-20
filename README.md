@@ -173,6 +173,27 @@ WantedBy=multi-user.target
 
 ---
 
+## Moving to a Different Discord Server
+
+To move the bot to a new server without losing any miles or member data, run:
+
+```bash
+python update_server.py
+```
+
+This updates only the Discord guild ID and clears the notification channel. All mileage, member records, and Strava config are untouched.
+
+After running it, restart the bot and run `/notify setchannel` in the new server.
+
+To invite the bot to the new server first:
+1. Go to the [Discord Developer Portal](https://discord.com/developers/applications)
+2. Select your bot → OAuth2 → URL Generator
+3. Select scopes: `bot` and `applications.commands`
+4. Select permissions: `Send Messages`, `Embed Links`, `Read Message History`
+5. Open the generated URL and select the new server
+
+---
+
 ## Security Notes
 
 - `cgrc.db` — encrypted SQLite database, never commit this
