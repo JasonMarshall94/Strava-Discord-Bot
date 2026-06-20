@@ -228,6 +228,13 @@ class ConfigStore:
         )
         self._conn.commit()
 
+    def update_member(self, strava_athlete_id: int, display_name: str, message: str) -> None:
+        self._conn.execute(
+            "UPDATE members SET display_name = ?, message = ? WHERE strava_athlete_id = ?",
+            (display_name, message, strava_athlete_id),
+        )
+        self._conn.commit()
+
     def delete_member(self, strava_athlete_id: int) -> None:
         self._conn.execute(
             "DELETE FROM members WHERE strava_athlete_id = ?", (strava_athlete_id,)
@@ -301,6 +308,27 @@ class ConfigStore:
             ORDER BY total_miles DESC
             """,
             (str(year),),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_recent_runs(self, limit: int = 20) -> list[dict]:
+        rows = self._conn.execute(
+            """
+            SELECT
+                COALESCE(m.display_name,
+                         r.strava_firstname || ' ' || r.strava_lastname) AS display_name,
+                r.distance_miles,
+                r.moving_time,
+                r.logged_at
+            FROM run_log r
+            LEFT JOIN members m
+                ON  m.strava_firstname = r.strava_firstname
+                AND m.strava_lastname  = r.strava_lastname
+            WHERE r.distance_m != -1
+            ORDER BY r.logged_at DESC
+            LIMIT ?
+            """,
+            (limit,),
         ).fetchall()
         return [dict(r) for r in rows]
 

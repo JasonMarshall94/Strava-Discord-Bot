@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Members{% endblock %}
+{% block content %}
+
+<div class="page-header flex justify-between items-center">
+  <div>
+    <h1>Members</h1>
+    <p class="text-muted">{{ members|length }} club members</p>
+  </div>
+</div>
+
+<div class="card">
+  <table>
+    <thead>
+      <tr>
+        <th>Display Name</th>
+        <th>Strava Name</th>
+        <th>Miles (YTD)</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for member in members %}
+      <tr>
+        <td>
+          <strong>{{ member.display_name }}</strong>
+          {% if member.total_miles >= 100 %}<span class="crown">👑</span>{% endif %}
+        </td>
+        <td class="text-muted">{{ member.strava_firstname }} {{ member.strava_lastname }}</td>
+        <td>{{ "%.1f"|format(member.total_miles) }} mi</td>
+        <td>
+          <a href="/members/{{ member.strava_athlete_id }}" class="btn btn-ghost btn-sm">Edit</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% endblock %}

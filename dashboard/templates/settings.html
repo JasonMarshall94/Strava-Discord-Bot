@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+
+<div class="page-header">
+  <h1>Settings</h1>
+  <p class="text-muted">Bot configuration</p>
+</div>
+
+{% if saved %}
+<div class="alert alert-success">Settings saved.</div>
+{% endif %}
+
+<div class="card">
+  <form method="POST" action="/settings">
+    <div class="form-group">
+      <label for="channel_id">Notification Channel ID</label>
+      <input type="text" id="channel_id" name="channel_id"
+             value="{{ channel_id }}" placeholder="e.g. 1234567890123456789">
+      <p class="field-hint">
+        In Discord: enable Developer Mode (Settings → Advanced), then right-click the
+        channel → Copy Channel ID.
+      </p>
+    </div>
+
+    <div class="form-group">
+      <label class="toggle">
+        <input type="checkbox" name="custom_messages" value="on"
+               {% if custom_messages %}checked{% endif %}>
+        Enable custom messages
+      </label>
+      <p class="field-hint" style="margin-top:8px">
+        When off, all notifications use the default format regardless of
+        individual member messages.
+      </p>
+    </div>
+
+    <button type="submit" class="btn btn-primary">Save settings</button>
+  </form>
+</div>
+
+{% endblock %}

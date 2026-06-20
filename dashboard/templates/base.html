@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}CGRC Bot{% endblock %} — Admin</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<nav>
+  <a href="/" class="brand">CGRC Bot</a>
+  <a href="/" {% if request.url.path == "/" %}class="active"{% endif %}>Dashboard</a>
+  <a href="/members" {% if request.url.path.startswith("/members") %}class="active"{% endif %}>Members</a>
+  <a href="/settings" {% if request.url.path == "/settings" %}class="active"{% endif %}>Settings</a>
+  <a href="/logout" class="logout">Logout</a>
+</nav>
+<div class="container">
+  {% block content %}{% endblock %}
+</div>
+</body>
+</html>

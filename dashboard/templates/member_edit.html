@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}{{ member.display_name }}{% endblock %}
+{% block content %}
+
+<div class="page-header">
+  <a href="/members" class="text-muted" style="font-size:0.875rem">← Back to Members</a>
+  <h1 style="margin-top:8px">{{ member.display_name }}</h1>
+  <p class="text-muted">
+    {{ member.strava_firstname }} {{ member.strava_lastname }} &middot;
+    {{ "%.1f"|format(member.total_miles) }} mi this year
+  </p>
+</div>
+
+{% if saved %}
+<div class="alert alert-success">Changes saved.</div>
+{% endif %}
+{% if error %}
+<div class="alert alert-error">{{ error }}</div>
+{% endif %}
+
+<div class="card">
+  <form method="POST" action="/members/{{ member.strava_athlete_id }}">
+    <div class="form-group">
+      <label for="display_name">Display Name</label>
+      <input type="text" id="display_name" name="display_name"
+             value="{{ member.display_name }}" required>
+    </div>
+
+    <div class="form-group">
+      <label for="message">Custom Message</label>
+      <textarea id="message" name="message">{{ member.message }}</textarea>
+      <p class="field-hint">
+        Variables: {display_name} {activity_name} {distance} {time} {pace} {strava_url}
+      </p>
+    </div>
+
+    <div class="form-group">
+      <label for="miles">Set Miles (optional)</label>
+      <input type="number" id="miles" name="miles" step="0.01" min="0"
+             placeholder="Leave blank to keep current ({{ "%.1f"|format(member.total_miles) }} mi)">
+      <p class="field-hint">Replaces the current total. New runs will add on top of this.</p>
+    </div>
+
+    <button type="submit" class="btn btn-primary">Save changes</button>
+  </form>
+</div>
+
+{% endblock %}
