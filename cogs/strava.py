@@ -47,15 +47,16 @@ class Strava(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self._silent_poll_needed = True  # first poll after startup/reset is always silent
+        self._silent_poll_needed = True   # startup: log real miles, no notifications
+        self._zero_miles_poll_needed = False  # post-setmiles: log 0 miles, no notifications
         self.poll_activities.start()
 
     def cog_unload(self):
         self.poll_activities.cancel()
 
     def request_silent_poll(self):
-        """Call this after wiping run_log so the next poll re-logs without notifying."""
-        self._silent_poll_needed = True
+        """Call after wiping run_log: next poll deduplicates without adding miles or notifying."""
+        self._zero_miles_poll_needed = True
 
     # ------------------------------------------------------------------
     # Polling task
@@ -65,7 +66,7 @@ class Strava(commands.Cog):
     async def poll_activities(self):
         if config.store.get("SILENT_POLL_REQUESTED") == "1":
             config.store.set("SILENT_POLL_REQUESTED", "0")
-            self._silent_poll_needed = True
+            self._zero_miles_poll_needed = True
 
         token = await self._get_valid_token()
         if not token:
@@ -88,8 +89,10 @@ class Strava(commands.Cog):
                     return
                 activities = await resp.json()
 
-        silent = self._silent_poll_needed
+        silent = self._silent_poll_needed or self._zero_miles_poll_needed
+        zero_miles = self._zero_miles_poll_needed
         self._silent_poll_needed = False
+        self._zero_miles_poll_needed = False
 
         for activity in activities:
             if activity.get("type") != "Run":
@@ -103,7 +106,8 @@ class Strava(commands.Cog):
                 continue
 
             distance_miles = round(distance_m / 1609.344, 2)
-            config.store.log_activity(firstname, lastname, moving_time, distance_m, distance_miles)
+            # Post-setmiles poll: log 0 miles so runs are deduplicated but don't inflate the total
+            config.store.log_activity(firstname, lastname, moving_time, distance_m, 0.0 if zero_miles else distance_miles)
 
             if not silent:
                 await self._post_notification(activity, firstname, lastname, distance_m)
