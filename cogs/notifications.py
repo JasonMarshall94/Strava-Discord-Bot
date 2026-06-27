@@ -32,11 +32,15 @@ class Notifications(commands.Cog):
 
     @setchannel.error
     async def setchannel_error(self, interaction: discord.Interaction, error):
-        if isinstance(error, app_commands.MissingPermissions):
-            await interaction.response.send_message(
-                "You need the **Manage Server** permission to change the notification channel.",
-                ephemeral=True,
-            )
+        msg = (
+            "You need the **Manage Server** permission to change the notification channel."
+            if isinstance(error, app_commands.MissingPermissions)
+            else f"An error occurred: {error}"
+        )
+        if interaction.response.is_done():
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
 
     @notify_group.command(
         name="custommessages",
@@ -57,11 +61,15 @@ class Notifications(commands.Cog):
 
     @custommessages.error
     async def custommessages_error(self, interaction: discord.Interaction, error):
-        if isinstance(error, app_commands.MissingPermissions):
-            await interaction.response.send_message(
-                "You need the **Manage Server** permission to change this setting.",
-                ephemeral=True,
-            )
+        msg = (
+            "You need the **Manage Server** permission to change this setting."
+            if isinstance(error, app_commands.MissingPermissions)
+            else f"An error occurred: {error}"
+        )
+        if interaction.response.is_done():
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
 
 
 async def setup(bot: commands.Bot):

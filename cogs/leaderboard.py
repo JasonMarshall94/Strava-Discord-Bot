@@ -100,11 +100,15 @@ class Leaderboard(commands.Cog):
 
     @setmiles.error
     async def setmiles_error(self, interaction: discord.Interaction, error):
-        if isinstance(error, app_commands.MissingPermissions):
-            await interaction.response.send_message(
-                "You need the **Manage Server** permission to use this command.",
-                ephemeral=True,
-            )
+        msg = (
+            "You need the **Manage Server** permission to use this command."
+            if isinstance(error, app_commands.MissingPermissions)
+            else f"An error occurred: {error}"
+        )
+        if interaction.response.is_done():
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
 
     @tasks.loop(
         time=datetime.time(hour=RECAP_HOUR, minute=0, tzinfo=datetime.timezone.utc)
